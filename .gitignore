@@ -4,3 +4,7 @@ log/*
 MACVO_ROS2/Model/*
 *.pth
 *.pkl
+
+__pycache__/
+*.pyc
+

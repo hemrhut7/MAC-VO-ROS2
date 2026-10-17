@@ -1,0 +1,101 @@
+Common:
+  device: &device cuda
+  max_depth: &max_depth auto
+
+Odometry:
+  name: MACVO_Robot
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 200 # Upper bound of KPs in each frame
+    match_cov_default: 0.25
+    profile: false
+    mapping: false
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.05
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_depth: *max_depth
+      max_depth_cov: 250.0
+      max_match_cov: 100.0
+  
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 5.0
+      max_depth_cov: 0.005
+      mask_width: 32
+
+  frontend:
+    type: CUDAGraph_FlowFormerCovFrontend
+    args:
+      device: *device
+      weight: ./model/MACVO_FrontendCov.pth
+      dtype: fp32
+      max_flow: -1
+      enforce_positive_disparity: false
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: FilterCompose
+    args:
+      filter_args:
+        - type: CovarianceSanityFilter
+          args:
+        - type: SimpleDepthFilter
+          args:
+            min_depth: 0.05
+            max_depth: *max_depth
+        - type: LikelyFrontOfCamFilter
+          args:
+  
+  postprocess:
+    type: MotionInterpolate
+    args:
+  
+  keyframe:
+    type: AllKeyframe
+    args:
+  
+  optimizer:
+    type: TwoFramePoseOptimizer
+    args:
+      device: cpu
+      vectorize: true
+      parallel: true
+
+Camera:
+  # Rectified camera parameters for Waveshare AR0144 stereo camera (640x480)
+  fx: 693.215205256373
+  fy: 693.215205256373
+  cx: 314.91036224365234
+  cy: 239.1413860321045
+  bl: 0.05192059198363955
+
+  # Raw stereo calibration for on-the-fly rectification
+  rectify: true
+  width: 640
+  height: 480
+  K0: [642.3066735, 0.0, 307.3946817, 0.0, 639.1076964, 232.5087614, 0.0, 0.0, 1.0]
+  D0: [0.17890018, -0.20487404, -0.00149489, 0.00011301]
+  K1: [644.2906011, 0.0, 340.1790450, 0.0, 640.7801152, 245.5372358, 0.0, 0.0, 1.0]
+  D1: [0.18277212, -0.22449650, 0.00197455, 0.00044270]
+  R: [0.99991248, 0.00017910, -0.01322857, -0.00028379, 0.99996865, -0.00791285, 0.01322674, 0.00791591, 0.99988119]
+  T: [-0.05191207, -0.00016761, -0.00092555]

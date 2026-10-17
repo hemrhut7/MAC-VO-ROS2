@@ -10,6 +10,8 @@ def package_files(directory):
             paths.append(os.path.join('..', path, filename))
     return paths
 
+from glob import glob
+
 extra_files = package_files('MACVO_ROS2/src') + package_files('MACVO_ROS2/config')
 
 setup(
@@ -19,7 +21,10 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + "/model", ['Model/MACVO_FrontendCov.pth', 'Model/MACVO_posenet.pkl'])
+        ('share/' + package_name + "/model", ['Model/MACVO_FrontendCov.pth', 'Model/MACVO_posenet.pkl']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        (os.path.join('share', package_name, 'config'), glob('MACVO_ROS2/config/*.yaml')),
+        (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
     ],
     package_data={package_name: extra_files},
     install_requires=['setuptools'],
