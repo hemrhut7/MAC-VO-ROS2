@@ -120,7 +120,7 @@ class MACVONode(Node):
         cfg, _ = load_config(config)
         self.frame_id, self.camera = 0, cfg.Camera
 
-        # Camera to IMU (body) extrinsics
+        # Camera optical to IMU (body) extrinsics from Kalibr
         default_R_body_cam = np.array([
             [ 0.02367378,  0.00337240,  0.99971405],
             [-0.99971785,  0.00202436,  0.02366704],
@@ -130,12 +130,16 @@ class MACVONode(Node):
 
         if hasattr(self.camera, "body_T_cam"):
             bTc = self.camera.body_T_cam
-            self.R_body_cam = np.array(bTc.R, dtype=np.float64).reshape((3, 3))
+            self.R_body_cam_opt = np.array(bTc.R, dtype=np.float64).reshape((3, 3))
             self.T_body_cam = np.array(bTc.T, dtype=np.float64)
         else:
-            self.R_body_cam = default_R_body_cam
+            self.R_body_cam_opt = default_R_body_cam
             self.T_body_cam = default_T_body_cam
 
+        # Convert Kalibr optical frame (X-right, Y-down, Z-forward) to MAC-VO camera frame (NED: X-fwd, Y-right, Z-down)
+        # R_opt2ned maps [x_opt, y_opt, z_opt] -> [z_opt, x_opt, y_opt]
+        R_opt2ned = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=np.float64)
+        self.R_body_cam = self.R_body_cam_opt @ R_opt2ned.T
         self.R_cam_body = self.R_body_cam.T
         self.R_cam_body_tensor = torch.from_numpy(self.R_cam_body).float()
         self.R_body_cam_tensor = torch.from_numpy(self.R_body_cam).float()
@@ -270,13 +274,24 @@ class MACVONode(Node):
         return None
 
     def publish_data(self, system: MACVO):
-        # Latest pose
+        # Latest pose in MAC-VO (NED convention: +X fwd, +Y right, +Z down)
         pose = pp.SE3(system.graph.frames.data["pose"][-1])
         time_ns = int(system.graph.frames.data["time_ns"][-1].item())
         time = Time()
         time.sec = time_ns // 1_000_000_000
         time.nanosec = time_ns % 1_000_000_000
-        pose_msg = to_stamped_pose(pose, self.coord_frame, time)
+
+        # Convert NED pose to ROS NWU coordinates (+X fwd, +Y left, +Z up):
+        # Position: [x, -y, -z]
+        # Orientation quaternion: [qx, -qy, -qz, qw]
+        pose_tensor = pose.tensor().detach().cpu().clone()
+        pose_tensor[1] *= -1.0  # y_nwu = -y_ned
+        pose_tensor[2] *= -1.0  # z_nwu = -z_ned
+        pose_tensor[4] *= -1.0  # qy_nwu = -qy_ned
+        pose_tensor[5] *= -1.0  # qz_nwu = -qz_ned
+        pose_nwu = pp.SE3(pose_tensor)
+
+        pose_msg = to_stamped_pose(pose_nwu, self.coord_frame, time)
 
         # Publish PoseStamped
         self.pose_send.publish(pose_msg)
@@ -314,8 +329,14 @@ class MACVONode(Node):
         else:
             points = system.graph.get_match2point(system.graph.get_frame2match(system.graph.frames[-1:]))
 
+        # Convert NED map points to ROS NWU coordinates (+X fwd, +Y left, +Z up)
+        pos_Tw_ned = points.data["pos_Tw"]
+        pos_Tw_nwu = pos_Tw_ned.clone()
+        pos_Tw_nwu[..., 1] *= -1.0
+        pos_Tw_nwu[..., 2] *= -1.0
+
         map_pc_msg = to_pointcloud(
-            position  = points.data["pos_Tw"],
+            position  = pos_Tw_nwu,
             keypoints = None,
             frame_id  = self.coord_frame,
             colors    = points.data["color"],
