@@ -5,13 +5,14 @@ import cv2
 import numpy as np
 
 from rclpy.node import Node
-from sensor_msgs.msg import Image, PointCloud
+from sensor_msgs.msg import Image, PointCloud, Imu
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry, Path as NavPath
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Time
 import tf2_ros
+import collections
 
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -54,7 +55,10 @@ class MACVONode(Node):
         path_publish: str = "/macvo/path",
         odom_frame: str = "odom",
         camera_frame: str = "camera_link",
-        publish_tf: bool = True
+        publish_tf: bool = True,
+        imu_subscribe: str = "/imu/data_raw",
+        prior_pose_subscribe: str = "",
+        prior_odom_subscribe: str = "",
     ) -> None:
         super().__init__("macvo")
         self.get_logger().set_level(logging.INFO)
@@ -64,6 +68,15 @@ class MACVONode(Node):
         self.camera_frame = camera_frame
         self.publish_tf = publish_tf
         self.coord_frame = odom_frame
+        self.imu_subscribe = imu_subscribe
+        self.prior_pose_subscribe = prior_pose_subscribe
+        self.prior_odom_subscribe = prior_odom_subscribe
+
+        # Ring buffers for motion priors
+        self.imu_buffer = collections.deque(maxlen=2000)
+        self.prior_pose_buffer = collections.deque(maxlen=1000)
+        self.prior_odom_buffer = collections.deque(maxlen=1000)
+        self.prev_frame_time_ns = None
 
         if self.publish_tf:
             self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -72,6 +85,25 @@ class MACVONode(Node):
         imageR_recv = Subscriber(self, Image, imageR_subscribe, qos_profile=1)
         self.stereo_recv = ApproximateTimeSynchronizer([imageL_recv, imageR_recv], queue_size=20, slop=0.08)
         self.stereo_recv.registerCallback(self.receive_stereo)
+
+        # Prior Subscribers
+        if self.imu_subscribe:
+            self.imu_recv = self.create_subscription(
+                Imu, self.imu_subscribe, self.imu_callback, qos_profile=100
+            )
+            self.get_logger().info(f"Subscribed to IMU prior: {self.imu_subscribe}")
+
+        if self.prior_pose_subscribe:
+            self.pose_recv = self.create_subscription(
+                PoseStamped, self.prior_pose_subscribe, self.prior_pose_callback, qos_profile=50
+            )
+            self.get_logger().info(f"Subscribed to Pose prior: {self.prior_pose_subscribe}")
+
+        if self.prior_odom_subscribe:
+            self.odom_recv = self.create_subscription(
+                Odometry, self.prior_odom_subscribe, self.prior_odom_callback, qos_profile=50
+            )
+            self.get_logger().info(f"Subscribed to Odometry prior: {self.prior_odom_subscribe}")
 
         self.pose_send = self.create_publisher(PoseStamped, pose_publish, qos_profile=1)
         self.map_send  = self.create_publisher(PointCloud, map_pc_publish, qos_profile=1)
@@ -85,6 +117,26 @@ class MACVONode(Node):
         # Start MAC-VO
         cfg, _ = load_config(config)
         self.frame_id, self.camera = 0, cfg.Camera
+
+        # Camera to IMU (body) extrinsics
+        default_R_body_cam = np.array([
+            [ 0.02367378,  0.00337240,  0.99971405],
+            [-0.99971785,  0.00202436,  0.02366704],
+            [-0.00194397, -0.99999226,  0.00341938]
+        ], dtype=np.float64)
+        default_T_body_cam = np.array([0.04427751, 0.04159181, 0.09237273], dtype=np.float64)
+
+        if hasattr(self.camera, "body_T_cam"):
+            bTc = self.camera.body_T_cam
+            self.R_body_cam = np.array(bTc.R, dtype=np.float64).reshape((3, 3))
+            self.T_body_cam = np.array(bTc.T, dtype=np.float64)
+        else:
+            self.R_body_cam = default_R_body_cam
+            self.T_body_cam = default_T_body_cam
+
+        self.R_cam_body = self.R_body_cam.T
+        self.R_cam_body_tensor = torch.from_numpy(self.R_cam_body).float()
+        self.R_body_cam_tensor = torch.from_numpy(self.R_body_cam).float()
 
         # Resolve weight path
         weight_path = Path(cfg.Odometry.frontend.args.weight)
@@ -137,6 +189,83 @@ class MACVONode(Node):
 
         self.odometry.register_on_optimize_finish(self.publish_data)
         self.get_logger().info(f"MAC-VO Node successfully initialized (listening to {imageL_subscribe} & {imageR_subscribe})")
+
+    def imu_callback(self, msg: Imu):
+        t_ns = int(msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec)
+        w = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], dtype=np.float64)
+        self.imu_buffer.append((t_ns, w))
+
+    def prior_pose_callback(self, msg: PoseStamped):
+        t_ns = int(msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec)
+        pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z], dtype=np.float64)
+        quat = np.array([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w], dtype=np.float64)
+        self.prior_pose_buffer.append((t_ns, pos, quat))
+
+    def prior_odom_callback(self, msg: Odometry):
+        t_ns = int(msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec)
+        pos = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z], dtype=np.float64)
+        quat = np.array([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w], dtype=np.float64)
+        self.prior_odom_buffer.append((t_ns, pos, quat))
+
+    @staticmethod
+    def _interp_pose(buffer, target_ns: int):
+        times = [b[0] for b in buffer]
+        idx = np.searchsorted(times, target_ns)
+        if idx == 0:
+            return buffer[0][1], buffer[0][2]
+        if idx >= len(buffer):
+            return buffer[-1][1], buffer[-1][2]
+        t0, p0, q0 = buffer[idx - 1]
+        t1, p1, q1 = buffer[idx]
+        alpha = float(target_ns - t0) / float(t1 - t0) if t1 > t0 else 0.0
+        p = (1.0 - alpha) * p0 + alpha * p1
+        q = (1.0 - alpha) * q0 + alpha * q1
+        norm_q = np.linalg.norm(q)
+        if norm_q > 1e-6:
+            q = q / norm_q
+        return p, q
+
+    def compute_motion_prior(self, t0_ns: int | None, t1_ns: int) -> pp.LieTensor | None:
+        if t0_ns is None or t1_ns <= t0_ns:
+            return None
+
+        # 1. Check external Odometry or Pose prior
+        buffer = self.prior_odom_buffer if len(self.prior_odom_buffer) > 0 else self.prior_pose_buffer
+        if len(buffer) >= 2 and buffer[0][0] <= t0_ns and buffer[-1][0] >= t1_ns:
+            p0, q0 = self._interp_pose(buffer, t0_ns)
+            p1, q1 = self._interp_pose(buffer, t1_ns)
+            if p0 is not None and p1 is not None:
+                T0_b = pp.SE3(torch.cat([torch.from_numpy(p0).float(), torch.from_numpy(q0).float()]))
+                T1_b = pp.SE3(torch.cat([torch.from_numpy(p1).float(), torch.from_numpy(q1).float()]))
+                delta_T_b = T0_b.Inv() @ T1_b
+                b_T_c = pp.SE3(torch.cat([
+                    torch.from_numpy(self.T_body_cam).float(),
+                    pp.from_matrix(self.R_body_cam_tensor, pp.SO3_type).tensor()
+                ]))
+                return b_T_c.Inv() @ delta_T_b @ b_T_c
+
+        # 2. Check IMU gyro integration prior
+        if len(self.imu_buffer) >= 2:
+            imus = [item for item in self.imu_buffer if t0_ns <= item[0] <= t1_ns]
+            if len(imus) >= 1:
+                dR_body = pp.identity_SO3()
+                prev_t = t0_ns
+                for (cur_t, w) in imus:
+                    dt = (cur_t - prev_t) * 1e-9
+                    if dt > 0:
+                        dR_body = dR_body @ pp.so3(torch.from_numpy(w * dt).float()).Exp()
+                    prev_t = cur_t
+                dt_tail = (t1_ns - prev_t) * 1e-9
+                if dt_tail > 0 and len(imus) > 0:
+                    dR_body = dR_body @ pp.so3(torch.from_numpy(imus[-1][1] * dt_tail).float()).Exp()
+
+                # Transform rotation increment to camera frame:
+                # dR_cam = R_cam_body @ dR_body @ R_body_cam
+                dR_cam_mat = self.R_cam_body_tensor @ dR_body.matrix() @ self.R_body_cam_tensor
+                dR_cam_so3 = pp.from_matrix(dR_cam_mat, pp.SO3_type)
+                return pp.SE3(torch.cat([torch.zeros(3), dR_cam_so3.tensor()]))
+
+        return None
 
     def publish_data(self, system: MACVO):
         # Latest pose
@@ -218,6 +347,10 @@ class MACVONode(Node):
 
         time_ns = int(timestamp.sec * 1_000_000_000 + timestamp.nanosec)
 
+        # Compute external motion prior (from IMU or Pose/Odometry)
+        motion_prior = self.compute_motion_prior(self.prev_frame_time_ns, time_ns)
+        self.prev_frame_time_ns = time_ns
+
         # Instantiate a frame and scale to the desired height & width
         stereo_frame = self.frame_fn(StereoFrame(
             idx    =[self.frame_id],
@@ -237,6 +370,11 @@ class MACVONode(Node):
                 imageR=torch.tensor(imageR)[..., :3].float().permute(2, 0, 1).unsqueeze(0) / 255.,
             )
         ))
+
+        # Attach motion prior to frame
+        if motion_prior is not None:
+            stereo_frame.motion_prior = motion_prior
+
         self.odometry.run(stereo_frame)
 
         self.frame_id += 1
@@ -253,6 +391,9 @@ def main():
     temp_node.declare_parameter("config", "")
     temp_node.declare_parameter("imageL_topic", "")
     temp_node.declare_parameter("imageR_topic", "")
+    temp_node.declare_parameter("imu_topic", "")
+    temp_node.declare_parameter("prior_pose_topic", "")
+    temp_node.declare_parameter("prior_odom_topic", "")
     temp_node.declare_parameter("pose_topic", "")
     temp_node.declare_parameter("map_topic", "")
     temp_node.declare_parameter("odom_topic", "")
@@ -264,6 +405,9 @@ def main():
     p_config = temp_node.get_parameter("config").value
     p_imageL = temp_node.get_parameter("imageL_topic").value
     p_imageR = temp_node.get_parameter("imageR_topic").value
+    p_imu = temp_node.get_parameter("imu_topic").value
+    p_prior_pose = temp_node.get_parameter("prior_pose_topic").value
+    p_prior_odom = temp_node.get_parameter("prior_odom_topic").value
     p_pose = temp_node.get_parameter("pose_topic").value
     p_map = temp_node.get_parameter("map_topic").value
     p_odom = temp_node.get_parameter("odom_topic").value
@@ -278,6 +422,9 @@ def main():
     args.add_argument("--config", type=str, default="")
     args.add_argument("--imageL_topic", type=str, default="")
     args.add_argument("--imageR_topic", type=str, default="")
+    args.add_argument("--imu_topic", type=str, default="")
+    args.add_argument("--prior_pose_topic", type=str, default="")
+    args.add_argument("--prior_odom_topic", type=str, default="")
     args.add_argument("--pose_topic", type=str, default="")
     args.add_argument("--map_topic", type=str, default="")
     args.add_argument("--odom_topic", type=str, default="")
@@ -295,14 +442,17 @@ def main():
         default_config = Path(__file__).resolve().parent / "config" / "robot_macvo.yaml"
 
     config_path = parsed.config or p_config or str(default_config)
-    imageL_topic = parsed.imageL_topic or p_imageL or "/camera/left/image_raw"
-    imageR_topic = parsed.imageR_topic or p_imageR or "/camera/right/image_raw"
+    imageL_topic = parsed.imageL_topic or p_imageL or "/camera/left/image_mono"
+    imageR_topic = parsed.imageR_topic or p_imageR or "/camera/right/image_mono"
+    imu_topic = parsed.imu_topic or p_imu or "/imu/data_raw"
+    prior_pose_topic = parsed.prior_pose_topic or p_prior_pose or ""
+    prior_odom_topic = parsed.prior_odom_topic or p_prior_odom or ""
     pose_topic = parsed.pose_topic or p_pose or "/macvo/pose"
     map_topic = parsed.map_topic or p_map or "/macvo/map"
     odom_topic = parsed.odom_topic or p_odom or "/macvo/odometry"
     path_topic = parsed.path_topic or p_path or "/macvo/path"
     odom_frame = parsed.odom_frame or p_odom_frame or "odom"
-    camera_frame = parsed.camera_frame or p_camera_frame or "camera_link"
+    camera_frame = parsed.camera_frame or p_camera_frame or "camera_left_optical_frame"
 
     # Optional Timer setup
     Timer.setup(active=parsed.timing)
@@ -319,7 +469,10 @@ def main():
         path_publish=path_topic,
         odom_frame=odom_frame,
         camera_frame=camera_frame,
-        publish_tf=bool(p_publish_tf)
+        publish_tf=bool(p_publish_tf),
+        imu_subscribe=imu_topic,
+        prior_pose_subscribe=prior_pose_topic,
+        prior_odom_subscribe=prior_odom_topic,
     )
     print("MACVO Node created and spinning...")
     try:

@@ -16,6 +16,9 @@ def generate_launch_description():
     config_file = LaunchConfiguration('config')
     imageL_topic = LaunchConfiguration('imageL_topic')
     imageR_topic = LaunchConfiguration('imageR_topic')
+    imu_topic = LaunchConfiguration('imu_topic')
+    prior_pose_topic = LaunchConfiguration('prior_pose_topic')
+    prior_odom_topic = LaunchConfiguration('prior_odom_topic')
     publish_tf = LaunchConfiguration('publish_tf')
     odom_frame = LaunchConfiguration('odom_frame')
     camera_frame = LaunchConfiguration('camera_frame')
@@ -35,13 +38,28 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'imageL_topic',
-            default_value='/camera/left/image_raw',
-            description='Topic name for Left camera image'
+            default_value='/camera/left/image_mono',
+            description='Topic name for Left camera image (default: /camera/left/image_mono)'
         ),
         DeclareLaunchArgument(
             'imageR_topic',
-            default_value='/camera/right/image_raw',
-            description='Topic name for Right camera image'
+            default_value='/camera/right/image_mono',
+            description='Topic name for Right camera image (default: /camera/right/image_mono)'
+        ),
+        DeclareLaunchArgument(
+            'imu_topic',
+            default_value='/imu/data_raw',
+            description='Topic name for IMU angular velocity prior (default: /imu/data_raw)'
+        ),
+        DeclareLaunchArgument(
+            'prior_pose_topic',
+            default_value='',
+            description='Optional external PoseStamped prior topic'
+        ),
+        DeclareLaunchArgument(
+            'prior_odom_topic',
+            default_value='',
+            description='Optional external Odometry prior topic'
         ),
         DeclareLaunchArgument(
             'publish_tf',
@@ -78,6 +96,9 @@ def generate_launch_description():
                 'config': config_file,
                 'imageL_topic': imageL_topic,
                 'imageR_topic': imageR_topic,
+                'imu_topic': imu_topic,
+                'prior_pose_topic': prior_pose_topic,
+                'prior_odom_topic': prior_odom_topic,
                 'publish_tf': publish_tf,
                 'odom_frame': odom_frame,
                 'camera_frame': camera_frame,
