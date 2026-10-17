@@ -1,8 +1,24 @@
 Panels:
   - Class: rviz_common/Displays
+    Help Height: 78
     Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Grid1
+        - /TF1
+        - /MAC-VO Odometry1
+        - /MAC-VO Path1
+        - /MAC-VO Map Pointcloud1
+        - /Camera Left Mono1
+      Splitter Ratio: 0.5
+    Tree Height: 600
   - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
     Name: Views
+    Splitter Ratio: 0.5
+
 Visualization Manager:
   Class: ""
   Displays:
@@ -16,6 +32,7 @@ Visualization Manager:
         Value: Lines
       Plane: XY
       Plane Cell Count: 20
+      Reference Frame: odom
     - Class: rviz_default_plugins/TF
       Enabled: true
       Name: TF
@@ -27,25 +44,29 @@ Visualization Manager:
       Enabled: true
       Name: MAC-VO Odometry
       Topic:
-        Value: /macvo/odometry
         Depth: 5
-        Reliability Policy: System Default
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /macvo/odometry
       Keep: 10
       Shape:
-        Value: Arrow
         Alpha: 1
         Color: 0; 255; 0
-        Shaft Length: 0.15
+        Head Length: 0.08
+        Head Radius: 0.05
+        Shaft Length: 0.2
         Shaft Radius: 0.02
-        Head Length: 0.05
-        Head Radius: 0.04
+        Value: Arrow
     - Class: rviz_default_plugins/Path
       Enabled: true
       Name: MAC-VO Path
       Topic:
-        Value: /macvo/path
         Depth: 5
-        Reliability Policy: System Default
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /macvo/path
       Color: 0; 255; 255
       Alpha: 1
       Line Style: Lines
@@ -54,20 +75,87 @@ Visualization Manager:
       Enabled: true
       Name: MAC-VO Map Pointcloud
       Topic:
-        Value: /macvo/map
         Depth: 5
-        Reliability Policy: System Default
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /macvo/map
       Style: Points
       Size (m): 0.03
       Color Transformer: RGB8
     - Class: rviz_default_plugins/Image
       Enabled: true
-      Name: Camera Left Raw
+      Name: Camera Left Mono
       Topic:
-        Value: /camera/left/image_raw
         Depth: 5
-        Reliability Policy: System Default
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera/left/image_mono
+
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: odom
     Frame Rate: 30
+
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /clicked_point
+
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 4.5
+      Enable Stereo Rendering:
+        Value: false
+      Focal Point:
+        X: 0.5
+        Y: 0.0
+        Z: 0.0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.6
+      Target Frame: "<Fixed Frame>"
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 0.785
+
+Window Geometry:
+  Height: 840
+  Width: 1280
+  X: 100
+  Y: 100
