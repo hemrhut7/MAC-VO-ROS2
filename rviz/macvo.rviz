@@ -92,6 +92,24 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /camera/left/image_mono
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: MAC-VO Depth Colored
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /macvo/depth_colored
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Name: MAC-VO Metric Depth (32FC1)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /macvo/depth
 
   Global Options:
     Background Color: 48; 48; 48

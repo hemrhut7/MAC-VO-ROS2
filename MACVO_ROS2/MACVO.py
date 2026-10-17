@@ -110,6 +110,8 @@ class MACVONode(Node):
         self.img_send  = self.create_publisher(Image, imageL_publish, qos_profile=1)
         self.odom_send = self.create_publisher(Odometry, odom_publish, qos_profile=1)
         self.path_send = self.create_publisher(NavPath, path_publish, qos_profile=1)
+        self.depth_send = self.create_publisher(Image, "/macvo/depth", qos_profile=1)
+        self.depth_color_send = self.create_publisher(Image, "/macvo/depth_colored", qos_profile=1)
 
         self.path_msg = NavPath()
         self.path_msg.header.frame_id = self.odom_frame
@@ -320,6 +322,31 @@ class MACVONode(Node):
             time      = time,
         )
         self.map_send.publish(map_pc_msg)
+
+        # Publish Depth Image (32FC1 metric depth and colorized heatmap)
+        if hasattr(system, "prev_keyframe") and system.prev_keyframe is not None:
+            depth_obj = system.prev_keyframe[2]
+            if hasattr(depth_obj, "depth") and depth_obj.depth is not None:
+                try:
+                    d_np = depth_obj.depth.detach().squeeze().cpu().numpy().astype(np.float32)
+                    depth_msg = to_image(d_np, self.camera_frame, time, encoding="32FC1")
+                    self.depth_send.publish(depth_msg)
+
+                    # Colorized depth heatmap for RViz
+                    valid_mask = (d_np > 0.05) & (d_np < 8.0)
+                    d_norm = np.zeros_like(d_np, dtype=np.uint8)
+                    if np.any(valid_mask):
+                        v_vals = d_np[valid_mask]
+                        min_d = float(np.percentile(v_vals, 2))
+                        max_d = float(np.percentile(v_vals, 98))
+                        clipped = np.clip(d_np, min_d, max_d)
+                        d_norm = ((clipped - min_d) / (max_d - min_d + 1e-6) * 255).astype(np.uint8)
+                    colored_d = cv2.applyColorMap(d_norm, cv2.COLORMAP_TURBO)
+                    colored_d[~valid_mask] = 0
+                    color_msg = to_image(colored_d, self.camera_frame, time, encoding="bgr8")
+                    self.depth_color_send.publish(color_msg)
+                except Exception as e:
+                    self.get_logger().warn(f"Failed to publish depth: {e}")
 
     def receive_stereo(self, msg_imageL: Image, msg_imageR: Image) -> None:
         imageL, timestamp = from_image(msg_imageL), msg_imageL.header.stamp
